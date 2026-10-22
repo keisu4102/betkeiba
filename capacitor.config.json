@@ -1,0 +1,12 @@
+{
+  "appId": "edu.tip.totetrack",
+  "appName": "ToteTrack",
+  "webDir": "public",
+  "server": {
+    "url": "https://YOUR-RENDER-SERVICE.onrender.com",
+    "cleartext": false,
+    "allowNavigation": [
+      "YOUR-RENDER-SERVICE.onrender.com"
+    ]
+  }
+}
