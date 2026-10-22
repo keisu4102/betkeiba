@@ -1,0 +1,9 @@
+# Example only: fictional/demo metadata; verify the actual event date and details yourself.
+name=Kikuka Sho
+date=2026-10-25
+venue=Kyoto
+raceNumber=11R
+netkeibaUrl=https://race.netkeiba.com/
+takeRate=10
+distance=3000
+surface=Turf
