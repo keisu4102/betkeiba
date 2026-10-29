@@ -1,141 +1,30 @@
 const $ = id => document.getElementById(id);
-let races = [];
-let selectedRace = null;
-
-function showNotice(message, isError = false) {
-  const el = $("notice");
-  el.textContent = message;
-  el.classList.remove("hidden", "error");
-  if (isError) el.classList.add("error");
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-function money(n) { return Number(n || 0).toLocaleString("en-US"); }
-async function api(url, options = {}) {
-  const response = await fetch(url, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Request failed.");
-  return data;
-}
-async function refreshWallet() {
-  const wallet = await api("/api/wallet");
-  $("balance").textContent = money(wallet.balance);
-  $("heroBalance").textContent = money(wallet.balance);
-}
-async function loadRaces() {
-  races = await api("/api/races");
-  const host = $("raceList");
-  if (!races.length) {
-    host.innerHTML = '<div class="race-card"><h3>No races yet</h3><p class="muted">Import a racecard below to get started. Nothing is preloaded.</p><a class="link-button" href="#import">Import your first race</a></div>';
-    return;
-  }
-  host.innerHTML = races.map(r => `
-    <article class="race-card">
-      <span class="pill ${r.status}">${r.status}</span>
-      <h3>${esc(r.name)} ${esc(r.raceNumber || "")}</h3>
-      <p class="race-meta">${esc(r.venue)} · ${esc(r.date || "Date not set")}<br>${r.distance ? `${r.distance} m · ` : ""}${esc(r.surface || "Turf")} · ${r.horses.length} runners</p>
-      <p class="muted">Pool: ${money(r.bets.reduce((s,b)=>s+b.stake,0))} credits</p>
-      <button onclick="openRace('${r._id}')">View race</button>
-      ${r.bets.length === 0 && r.status === "open" ? `<button class="secondary" onclick="deleteRace('${r._id}')">Delete</button>` : ""}
-    </article>`).join("");
-}
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
-}
-async function openRace(id) {
-  try {
-    selectedRace = await api(`/api/races/${id}`);
-    const pool = await api(`/api/races/${id}/pool`);
-    $("selectedRace").classList.remove("hidden");
-    $("raceTitle").textContent = `${selectedRace.name} ${selectedRace.raceNumber || ""}`;
-    $("raceMeta").textContent = `${selectedRace.venue} · ${selectedRace.date || "Date not set"} · ${selectedRace.distance ? selectedRace.distance + " m · " : ""}${selectedRace.surface} · Total pool ${money(pool.totalPool)} · Takeout ${selectedRace.takeRate}%`;
-    $("raceStatus").textContent = selectedRace.status;
-    $("raceStatus").className = `pill ${selectedRace.status}`;
-    $("betRaceId").value = selectedRace._id;
-    $("betHorse").innerHTML = selectedRace.horses.map(h => `<option value="${h._id}">${h.horseNo}. ${esc(h.name)}</option>`).join("");
-    $("horseRows").innerHTML = selectedRace.horses.map(h => {
-      const p = pool.horses.find(x => x.horseId === h._id);
-      const finish = h.finishPosition ? ` · Finish ${h.finishPosition}` : "";
-      return `<tr><td>${h.horseNo}</td><td><strong>${esc(h.name)}</strong>${finish}</td><td>${esc(h.sire)} / ${esc(h.dam)}</td><td>${esc(h.lastRace)}</td><td>${money(p?.amountBet)} cr</td><td>${p?.indicativeReturnPerCredit ? p.indicativeReturnPerCredit.toFixed(2) + "×" : "—"}</td><td><button class="secondary" onclick="pickHorse('${h._id}')">Select</button></td></tr>`;
-    }).join("");
-    const actions = $("raceActions");
-    actions.innerHTML = "";
-    if (selectedRace.status === "open") actions.append(makeAction("Close betting", () => raceAction("close")));
-    if (selectedRace.status === "closed" && !selectedRace.winnerHorseId) actions.append(makeAction("Simulate race", () => raceAction("simulate")));
-    if (selectedRace.status === "closed" && selectedRace.winnerHorseId) actions.append(makeAction("Settle payouts", () => raceAction("settle")));
-    $("betForm").querySelector("button").disabled = selectedRace.status !== "open";
-    $("results").classList.add("hidden");
-    if (selectedRace.status === "finished") renderFinished(selectedRace);
-    $("selectedRace").scrollIntoView({ behavior: "smooth", block: "start" });
-  } catch (e) { showNotice(e.message, true); }
-}
-function makeAction(label, callback) {
-  const button = document.createElement("button");
-  button.textContent = label;
-  button.onclick = callback;
-  return button;
-}
-function pickHorse(id) { $("betHorse").value = id; $("stake").focus(); }
-async function raceAction(action) {
-  try {
-    const result = await api(`/api/races/${selectedRace._id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    showNotice(result.message || `${action} complete.`);
-    await loadRaces(); await refreshWallet();
-    await openRace(selectedRace._id);
-    if (action === "simulate") showNotice(`Race simulated. Winner: ${result.winner.name}. Click Settle payouts to distribute the pool.`);
-    if (action === "settle") { renderFinished(result.race); showNotice(`Settlement complete. Winner: ${result.result.winner}.`); }
-  } catch (e) { showNotice(e.message, true); }
-}
-function renderFinished(race) {
-  const winner = race.horses.find(h => String(h._id) === String(race.winnerHorseId));
-  const pool = race.bets.reduce((s,b)=>s+b.stake,0);
-  const payouts = race.bets.filter(b=>b.payout > 0).reduce((s,b)=>s+b.payout,0);
-  $("results").classList.remove("hidden");
-  $("results").innerHTML = `<h3>🏆 Final result</h3><p>Winner: <strong class="winner">${winner ? esc(winner.name) : "Not available"}</strong></p><p>Pool: ${money(pool)} credits · Paid out: ${money(payouts)} credits</p><p>Finishing order: ${[...race.horses].sort((a,b)=>(a.finishPosition||999)-(b.finishPosition||999)).map(h=>`${h.finishPosition || "—"}. ${esc(h.name)}`).join(" · ")}</p>`;
-}
-$("betForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  try {
-    const result = await api("/api/bets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raceId: $("betRaceId").value, horseId: $("betHorse").value, stake: Number($("stake").value) }) });
-    showNotice(`${result.message} Ticket: ${result.ticket.ticketId.slice(0,8)}. Balance: ${money(result.balance)} credits.`);
-    await refreshWallet(); await loadRaces(); await openRace(selectedRace._id); await loadHistory();
-  } catch (e) { showNotice(e.message, true); }
-});
-$("importForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const form = new FormData();
-  if ($("metadataFile").files[0]) form.append("metadataFile", $("metadataFile").files[0]);
-  if ($("horseCsv").files[0]) form.append("horseCsv", $("horseCsv").files[0]);
-  form.append("metadataText", $("metadataText").value);
-  form.append("horseRows", $("horseRows").value);
-  try {
-    const result = await api("/api/races/import", { method: "POST", body: form });
-    showNotice(result.message);
-    $("importForm").reset();
-    await loadRaces(); await openRace(result.race._id);
-  } catch (e) { showNotice(e.message, true); }
-});
-async function deleteRace(id) {
-  if (!confirm("Delete this race? This is only allowed before bets are placed.")) return;
-  try { await api(`/api/races/${id}`, { method: "DELETE" }); showNotice("Race deleted."); await loadRaces(); }
-  catch (e) { showNotice(e.message, true); }
-}
-async function loadHistory() {
-  try {
-    const bets = await api("/api/bets/mine");
-    $("historyRows").innerHTML = bets.length ? bets.map(b=>`<tr><td>${esc(b.raceName)}</td><td>${esc(b.horseName)}</td><td>${money(b.stake)}</td><td>${esc(b.status)}</td><td>${money(b.payout)}</td></tr>`).join("") : '<tr><td colspan="5" class="muted">No bets yet.</td></tr>';
-  } catch (e) { showNotice(e.message, true); }
-}
-$("refreshBtn").onclick = async () => { await loadRaces(); await refreshWallet(); showNotice("Races refreshed."); };
-$("historyBtn").onclick = loadHistory;
-$("resetWallet").onclick = async () => {
-  if (!confirm("Reset the demo wallet to 10,000 credits? Existing tickets will remain in history.")) return;
-  try { await api("/api/wallet/reset", { method: "POST" }); await refreshWallet(); showNotice("Demo wallet reset."); }
-  catch (e) { showNotice(e.message, true); }
-};
-(async function init() {
-  try { await refreshWallet(); await loadRaces(); await loadHistory(); }
-  catch (e) { showNotice(e.message, true); }
-})();
-window.openRace = openRace;
-window.pickHorse = pickHorse;
-window.deleteRace = deleteRace;
+let me = null, races = [], selectedRace = null, authMode = 'login';
+const money = n => Number(n || 0).toLocaleString('en-US');
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function notice(message, error=false) { const el=$('notice'); el.textContent=message; el.classList.remove('hidden','error'); if(error)el.classList.add('error'); window.scrollTo({top:0,behavior:'smooth'}); }
+async function api(url, options={}) { const r=await fetch(url,{credentials:'same-origin',...options,headers:{...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(options.headers||{})}}); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||`Request failed (${r.status})`); return d; }
+function setAuthMode(mode){authMode=mode; $('loginTab').classList.toggle('active',mode==='login');$('registerTab').classList.toggle('active',mode==='register');$('authSubmit').textContent=mode==='login'?'Log in':'Create account';$('authPassword').autocomplete=mode==='login'?'current-password':'new-password';$('authHelp').textContent=mode==='login'?'Use your Betkeiba account credentials.':'Use at least 10 characters. Usernames can contain letters, numbers, dots, dashes, and underscores.';}
+$('loginTab').onclick=()=>setAuthMode('login'); $('registerTab').onclick=()=>setAuthMode('register');
+$('authForm').onsubmit=async e=>{e.preventDefault();try{const d=await api(`/api/auth/${authMode}`,{method:'POST',body:JSON.stringify({username:$('authUsername').value.trim(),password:$('authPassword').value})});me=d.user; $('authPassword').value='';await showApp();notice(authMode==='login'?'Welcome back.':'Account created. Your virtual credits are ready.');}catch(err){notice(err.message,true);}};
+$('logoutBtn').onclick=async()=>{try{await api('/api/auth/logout',{method:'POST',body:'{}'});me=null;selectedRace=null;$('appView').classList.add('hidden');$('nav').classList.add('hidden');$('authView').classList.remove('hidden');notice('You have logged out.');}catch(e){notice(e.message,true);}};
+async function boot(){try{const d=await api('/api/auth/me');if(d.user){me=d.user;await showApp();}}catch(e){notice(e.message,true);}}
+async function showApp(){ $('authView').classList.add('hidden');$('appView').classList.remove('hidden');$('nav').classList.remove('hidden');$('navUser').textContent=me.username;$('welcomeName').textContent=me.username;$('rolePill').textContent=me.role.toUpperCase();$('adminPanel').classList.toggle('hidden',me.role!=='admin');$('manualResult').classList.toggle('hidden',me.role!=='admin');await refreshWallet();await loadRaces();await loadHistory();if(me.role==='admin')await loadUsers(); }
+async function refreshWallet(){const w=await api('/api/wallet');$('balance').textContent=money(w.balance);}
+async function loadRaces(){races=await api('/api/races');$('raceCount').textContent=`${races.length} race${races.length===1?'':'s'}`;const host=$('raceList');if(!races.length){host.innerHTML='<div class="panel"><h3>No racecards yet</h3><p class="muted">An administrator can create a race or import a racecard. No demo races are preloaded.</p></div>';return;}host.innerHTML=races.map(r=>`<article class="race-card"><span class="pill ${esc(r.status)}">${esc(r.status)}</span><h3>${esc(r.name)} ${esc(r.raceNumber||'')}</h3><p class="race-meta">${esc(r.venue)} · ${esc(r.date||'Date not set')}<br>${r.distance?`${esc(r.distance)} m · `:''}${esc(r.surface||'Turf')} · ${r.horses.length} runners</p><div class="race-card-footer"><span class="muted small">Pool: ${money(r.bets.reduce((s,b)=>s+b.stake,0))} credits</span><button class="btn btn-primary" onclick="openRace('${r._id}')">View race →</button></div></article>`).join('');}
+async function openRace(id){try{selectedRace=await api(`/api/races/${id}`);const pool=await api(`/api/races/${id}/pool`);$('selectedRace').classList.remove('hidden');$('raceTitle').textContent=`${selectedRace.name} ${selectedRace.raceNumber||''}`;$('raceMeta').textContent=`${selectedRace.venue} · ${selectedRace.date||'Date not set'} · ${selectedRace.distance?selectedRace.distance+' m · ':''}${selectedRace.surface} · Pool ${money(pool.totalPool)} credits · Takeout ${selectedRace.takeRate}%`;$('raceStatus').textContent=selectedRace.status;$('raceStatus').className=`pill ${selectedRace.status}`;$('betHorse').innerHTML=selectedRace.horses.map(h=>`<option value="${h._id}">${h.horseNo}. ${esc(h.name)}</option>`).join('');$('horseRows').innerHTML=selectedRace.horses.map(h=>{const p=pool.horses.find(x=>x.horseId===String(h._id));return `<tr><td>${h.horseNo}</td><td><strong>${esc(h.name)}</strong>${h.finishPosition?`<br><span class="muted">Finish: ${h.finishPosition}</span>`:''}</td><td>${esc(h.sire)} / ${esc(h.dam)}</td><td>${esc(h.lastRace)}</td><td>${money(p?.amountBet)} cr</td><td>${p?.indicativeReturnPerCredit?Number(p.indicativeReturnPerCredit).toFixed(2)+'×':'—'}</td></tr>`}).join('');$('betForm').querySelector('button').disabled=selectedRace.status!=='open';$('betHorse').disabled=selectedRace.status!=='open';$('stake').disabled=selectedRace.status!=='open';const acts=$('raceActions');acts.innerHTML='';acts.classList.toggle('hidden',me.role!=='admin');if(me.role==='admin'){if(selectedRace.status==='open')acts.append(actionBtn('Close betting',()=>raceAction('close')));if(selectedRace.status==='closed'&&!selectedRace.winnerHorseId){acts.append(actionBtn('Simulate result (fictional)',()=>raceAction('simulate')));acts.append(actionBtn('Enter official result',()=>{$('manualResult').classList.remove('hidden');renderPositions();$('manualResult').scrollIntoView({behavior:'smooth'});},'btn btn-quiet'));}if(selectedRace.status==='closed'&&selectedRace.winnerHorseId)acts.append(actionBtn('Settle payouts',()=>raceAction('settle')));if(selectedRace.status==='open'&&selectedRace.bets.length===0)acts.append(actionBtn('Delete race',()=>deleteRace(selectedRace._id),'btn btn-danger'));}if(selectedRace.status==='finished'){const paid=selectedRace.bets.reduce((s,b)=>s+b.payout,0);$('raceResult').classList.remove('hidden');$('raceResult').innerHTML=`<h3>Official final result</h3><p>${[...selectedRace.horses].filter(h=>h.finishPosition).sort((a,b)=>a.finishPosition-b.finishPosition).map(h=>`${h.finishPosition}. ${esc(h.name)}`).join(' · ')}</p><p class="muted small">Total pool: ${money(selectedRace.totalPool)} credits · Ticket payouts: ${money(paid)} credits</p>`;}else{$('raceResult').classList.add('hidden');}$('manualResult').classList.toggle('hidden',!(me.role==='admin'&&selectedRace.status==='closed'&&!selectedRace.settledAt));if(me.role==='admin'&&selectedRace.status==='closed'&&!selectedRace.settledAt)renderPositions();$('selectedRace').scrollIntoView({behavior:'smooth',block:'start'});}catch(e){notice(e.message,true);}}
+function actionBtn(text,cb,cls='btn btn-primary'){const b=document.createElement('button');b.className=cls;b.textContent=text;b.onclick=cb;return b;}
+function renderPositions(){if(!selectedRace)return;$('resultPositions').innerHTML=selectedRace.horses.map(h=>`<label>${h.horseNo}. ${esc(h.name)}<select data-horse-id="${h._id}"><option value="">DNF / no position</option>${selectedRace.horses.map((_,i)=>`<option value="${i+1}" ${h.finishPosition===i+1?'selected':''}>${i+1}${i===0?'st':i===1?'nd':i===2?'rd':'th'}</option>`).join('')}</select></label>`).join('');}
+$('resultForm').onsubmit=async e=>{e.preventDefault();try{const vals=[...$('resultPositions').querySelectorAll('select')].filter(x=>x.value).map(x=>({id:x.dataset.horseId,pos:Number(x.value)}));const positions=vals.map(x=>x.pos);if(!vals.length||new Set(positions).size!==positions.length)throw new Error('Enter at least first place and use each finishing position only once.');vals.sort((a,b)=>a.pos-b.pos);if(vals.some((x,i)=>x.pos!==i+1))throw new Error('Finishing positions must be consecutive starting at 1. Leave only non-finishers blank.');const d=await api(`/api/races/${selectedRace._id}/results`,{method:'POST',body:JSON.stringify({finishOrder:vals.map(x=>x.id)})});notice(d.message);await loadRaces();await openRace(selectedRace._id);}catch(e){notice(e.message,true);}};
+async function raceAction(action){try{const d=await api(`/api/races/${selectedRace._id}/${action}`,{method:'POST',body:'{}'});notice(action==='simulate'?`Fictional simulation winner: ${d.winner.name}. You can settle payouts.`:d.message);await refreshWallet();await loadRaces();await openRace(selectedRace._id);await loadHistory();}catch(e){notice(e.message,true);}}
+$('betForm').onsubmit=async e=>{e.preventDefault();try{const d=await api('/api/bets',{method:'POST',body:JSON.stringify({raceId:selectedRace._id,horseId:$('betHorse').value,stake:Number($('stake').value)})});notice(`${d.message} Ticket ${d.ticket.ticketId.slice(0,8)} · balance ${money(d.balance)} credits.`);await refreshWallet();await loadRaces();await openRace(selectedRace._id);await loadHistory();}catch(e){notice(e.message,true);}};
+async function deleteRace(id){if(!confirm('Delete this race? This is only allowed before bets are placed.'))return;try{await api(`/api/races/${id}`,{method:'DELETE'});$('selectedRace').classList.add('hidden');notice('Race deleted.');await loadRaces();}catch(e){notice(e.message,true);}}
+$('createRaceForm').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const horses=String(f.get('horses')||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean).map((line,i)=>{const m=line.match(/^\s*(\d+)\s*[,;\t]\s*(.+)$/);if(!m)throw new Error(`Runner line ${i+1} must be formatted: horse number, horse name`);return {gate:Number(m[1]),horseNo:Number(m[1]),name:m[2].trim(),abilityScore:50};});if(horses.length<2)throw new Error('Add at least two runners.');const d=await api('/api/races',{method:'POST',body:JSON.stringify({name:f.get('name'),venue:f.get('venue'),date:f.get('date'),raceNumber:f.get('raceNumber'),distance:f.get('distance')?Number(f.get('distance')):null,surface:f.get('surface'),takeRate:Number(f.get('takeRate')),horses})});e.currentTarget.reset();notice('Race created.');await loadRaces();await openRace(d._id);}catch(e){notice(e.message,true);}};
+$('importForm').onsubmit=async e=>{e.preventDefault();const form=new FormData();if($('metadataFile').files[0])form.append('metadataFile',$('metadataFile').files[0]);if($('horseCsv').files[0])form.append('horseCsv',$('horseCsv').files[0]);try{const d=await api('/api/races/import',{method:'POST',body:form});e.currentTarget.reset();notice(d.message);await loadRaces();await openRace(d.race._id);}catch(e){notice(e.message,true);}};
+async function loadHistory(){try{const bets=await api('/api/bets/mine');$('historyList').innerHTML=bets.length?bets.map(b=>`<div class="history-item"><strong>${esc(b.horseName)}</strong><small>${esc(b.raceName)} · ${esc(b.status)}</small><div>${money(b.stake)} staked · ${money(b.payout)} payout</div><small>Ticket ${esc(String(b.ticketId).slice(0,8))}</small></div>`).join(''):'<p class="muted small">No bets yet. Choose a race to place your first ticket.</p>';}catch(e){$('historyList').innerHTML=`<p class="muted">${esc(e.message)}</p>`;}}
+async function loadUsers(){if(me.role!=='admin')return;try{const users=await api('/api/admin/users');$('userRows').innerHTML=users.map(u=>`<tr><td>${esc(u.username)}</td><td>${esc(u.role)}</td><td>${money(u.balance)}</td><td>${u.active?'Active':'Disabled'}</td><td><button class="btn btn-quiet" onclick="adjustCredits('${u.id}','${esc(u.username)}')">± Credits</button> <button class="btn btn-quiet" onclick="toggleUser('${u.id}',${!u.active})">${u.active?'Disable':'Enable'}</button> <button class="btn btn-quiet" onclick="changeRole('${u.id}','${u.role==='admin'?'user':'admin'}')">Make ${u.role==='admin'?'user':'admin'}</button></td></tr>`).join('')||'<tr><td colspan="5">No users yet.</td></tr>';}catch(e){notice(e.message,true);}}
+window.adjustCredits=async(id,username)=>{const amount=prompt(`Adjust ${username}'s balance. Use a positive number to add or negative to deduct.`);if(amount===null)return;const n=Number(amount);if(!Number.isSafeInteger(n)||n===0){notice('Enter a non-zero whole number.',true);return;}try{const d=await api(`/api/admin/users/${id}/credits`,{method:'POST',body:JSON.stringify({amount:n,note:`Admin adjustment by ${me.username}`})});notice(`${username}'s balance is now ${money(d.balance)} credits.`);await loadUsers();}catch(e){notice(e.message,true);}};
+window.toggleUser=async(id,active)=>{try{await api(`/api/admin/users/${id}`,{method:'PATCH',body:JSON.stringify({active})});notice('Account status updated.');await loadUsers();}catch(e){notice(e.message,true);}};
+window.changeRole=async(id,role)=>{if(!confirm(`Change this account role to ${role}?`))return;try{await api(`/api/admin/users/${id}`,{method:'PATCH',body:JSON.stringify({role})});notice('Account role updated.');await loadUsers();}catch(e){notice(e.message,true);}};
+$('refreshBtn').onclick=async()=>{try{await loadRaces();await refreshWallet();notice('Racecards refreshed.');}catch(e){notice(e.message,true);}};$('historyBtn').onclick=()=>{$('historyList').scrollIntoView({behavior:'smooth'});loadHistory();};$('reloadUsers').onclick=loadUsers;
+window.openRace=openRace;boot();
