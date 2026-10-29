@@ -1,32 +1,50 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const multer = require("multer");
 const crypto = require("crypto");
 const Race = require("./models/Race");
 const Wallet = require("./models/Wallet");
+const User = require("./models/User");
 const { decodeBuffer, parseMetadata, parseHorseCsv } = require("./services/importService");
 const { calculatePool, settleRace } = require("./services/payoutService");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
-async function getWallet() {
-  let wallet = await Wallet.findOne({ key: "demo-wallet" });
-  if (!wallet) wallet = await Wallet.create({ key: "demo-wallet", balance: 10000 });
+async function getWallet(userId, session = null) {
+  const key = String(userId);
+  let query = Wallet.findOne({ key });
+  if (session) query = query.session(session);
+  let wallet = await query;
+  if (!wallet) {
+    const docs = await Wallet.create([{ key, balance: Number(process.env.STARTING_CREDITS || 10000) }], session ? { session } : {});
+    wallet = docs[0];
+  }
   return wallet;
 }
+function adminOnly(req, res) {
+  if (req.user?.role !== "admin") { res.status(403).json({ error: "Administrator access required." }); return false; }
+  return true;
+}
+function publicRace(race) {
+  const data = race.toObject ? race.toObject() : { ...race };
+  data.bets = (data.bets || []).map(b => ({ horseId: b.horseId, horseName: b.horseName, stake: b.stake, status: b.status, payout: b.payout }));
+  return data;
+}
 
-router.get("/wallet", async (_req, res, next) => {
+router.get("/wallet", async (req, res, next) => {
   try {
-    const wallet = await getWallet();
+    const wallet = await getWallet(req.user.id);
     res.json({ balance: wallet.balance, transactions: wallet.transactions.slice(-20).reverse() });
   } catch (e) { next(e); }
 });
 
-router.post("/wallet/reset", async (_req, res, next) => {
+router.post("/wallet/reset", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
-    const wallet = await getWallet();
-    wallet.balance = 10000;
-    wallet.transactions.push({ type: "reset", amount: 10000, balanceAfter: 10000, note: "Demo wallet reset" });
+    const wallet = await getWallet(req.user.id);
+    wallet.balance = Number(process.env.STARTING_CREDITS || 10000);
+    wallet.transactions.push({ type: "reset", amount: wallet.balance, balanceAfter: wallet.balance, note: "Administrator wallet reset" });
     await wallet.save();
     res.json({ balance: wallet.balance });
   } catch (e) { next(e); }
@@ -35,7 +53,7 @@ router.post("/wallet/reset", async (_req, res, next) => {
 router.get("/races", async (_req, res, next) => {
   try {
     const races = await Race.find().sort({ createdAt: -1 });
-    res.json(races);
+    res.json(races.map(publicRace));
   } catch (e) { next(e); }
 });
 
@@ -43,11 +61,12 @@ router.get("/races/:id", async (req, res, next) => {
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
-    res.json(race);
+    res.json(publicRace(race));
   } catch (e) { next(e); }
 });
 
 router.post("/races/import", upload.fields([{ name: "metadataFile" }, { name: "horseCsv" }]), async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     let metadataText = req.files?.metadataFile?.[0] ? decodeBuffer(req.files.metadataFile[0].buffer) : (req.body.metadataText || "");
     const metadata = parseMetadata(metadataText);
@@ -61,6 +80,7 @@ router.post("/races/import", upload.fields([{ name: "metadataFile" }, { name: "h
 });
 
 router.post("/races", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const { name, venue, horses } = req.body;
     if (!name || !venue || !Array.isArray(horses) || horses.length < 2) {
@@ -72,6 +92,7 @@ router.post("/races", async (req, res, next) => {
 });
 
 router.put("/races/:id", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -86,6 +107,7 @@ router.put("/races/:id", async (req, res, next) => {
 });
 
 router.delete("/races/:id", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -96,6 +118,7 @@ router.delete("/races/:id", async (req, res, next) => {
 });
 
 router.post("/races/:id/horses", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -107,6 +130,7 @@ router.post("/races/:id/horses", async (req, res, next) => {
 });
 
 router.put("/races/:id/horses/:horseId", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -122,6 +146,7 @@ router.put("/races/:id/horses/:horseId", async (req, res, next) => {
 });
 
 router.delete("/races/:id/horses/:horseId", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -143,29 +168,93 @@ router.get("/races/:id/pool", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post("/bets", async (req, res, next) => {
+router.get("/admin/users", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
-    const { raceId, horseId, stake } = req.body;
-    const amount = Number(stake);
-    if (!Number.isInteger(amount) || amount < 10) return res.status(400).json({ error: "Stake must be a whole number of at least 10 credits." });
-    const race = await Race.findById(raceId);
-    if (!race) return res.status(404).json({ error: "Race not found." });
-    if (race.status !== "open") return res.status(400).json({ error: "Betting is closed for this race." });
-    const horse = race.horses.id(horseId);
-    if (!horse) return res.status(400).json({ error: "Select a valid horse." });
-    const wallet = await getWallet();
-    if (wallet.balance < amount) return res.status(400).json({ error: "Not enough virtual credits." });
-    // Educational single-user demo. For production, use authenticated users and atomic transactions.
-    wallet.balance -= amount;
-    wallet.transactions.push({ type: "bet", amount: -amount, balanceAfter: wallet.balance, note: `${race.name}: ${horse.name}` });
-    race.bets.push({ ticketId: crypto.randomUUID(), bettor: "demo", horseId: horse._id, horseName: horse.name, stake: amount });
-    await wallet.save();
-    await race.save();
-    res.status(201).json({ message: "Bet placed.", balance: wallet.balance, ticket: race.bets[race.bets.length - 1] });
+    const users = await User.find().select("username role active createdAt").sort({ createdAt: -1 });
+    const Wallet = require("./models/Wallet");
+    const wallets = await Wallet.find({ key: { $in: users.map(u => String(u._id)) } });
+    const byKey = new Map(wallets.map(w => [w.key, w.balance]));
+    res.json(users.map(u => ({ id: String(u._id), username: u.username, role: u.role, active: u.active, balance: byKey.get(String(u._id)) || 0, createdAt: u.createdAt })));
   } catch (e) { next(e); }
+});
+router.post("/admin/users/:id/credits", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
+  try {
+    const amount = Number(req.body.amount);
+    if (!Number.isSafeInteger(amount) || amount === 0 || Math.abs(amount) > 1000000) return res.status(400).json({ error: "Amount must be a non-zero whole number up to 1,000,000 credits." });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found." });
+    const wallet = await getWallet(user.id);
+    if (wallet.balance + amount < 0) return res.status(400).json({ error: "Adjustment would make the balance negative." });
+    wallet.balance += amount;
+    wallet.transactions.push({ type: "admin_adjustment", amount, balanceAfter: wallet.balance, note: String(req.body.note || `Admin adjustment by ${req.user.username}`).slice(0, 200) });
+    await wallet.save();
+    res.json({ username: user.username, balance: wallet.balance });
+  } catch (e) { next(e); }
+});
+router.patch("/admin/users/:id", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
+  try {
+    if (String(req.params.id) === String(req.user.id) && req.body.active === false) return res.status(400).json({ error: "You cannot disable your own account." });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found." });
+    if (req.body.active !== undefined) user.active = Boolean(req.body.active);
+    if (req.body.role !== undefined) {
+      if (!['admin','user'].includes(req.body.role)) return res.status(400).json({ error: "Invalid role." });
+      if (String(user._id) === String(req.user.id) && req.body.role !== 'admin') return res.status(400).json({ error: "You cannot remove your own admin role." });
+      user.role = req.body.role;
+    }
+    await user.save(); res.json({ id: user.id, username: user.username, role: user.role, active: user.active });
+  } catch (e) { next(e); }
+});
+router.post("/races/:id/results", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
+  try {
+    const race = await Race.findById(req.params.id);
+    if (!race) return res.status(404).json({ error: "Race not found." });
+    if (race.status !== "closed" || race.settledAt) return res.status(400).json({ error: "Close betting first. Results can only be entered before settlement." });
+    const order = req.body.finishOrder;
+    if (!Array.isArray(order) || order.length < 1) return res.status(400).json({ error: "Provide the official finishing order." });
+    const ids = order.map(String);
+    if (new Set(ids).size !== ids.length || ids.some(id => !race.horses.id(id))) return res.status(400).json({ error: "Finishing order contains duplicate or invalid horses." });
+    race.horses.forEach(h => { h.finishPosition = null; });
+    order.forEach((id, index) => { race.horses.id(id).finishPosition = index + 1; });
+    race.winnerHorseId = race.horses.id(order[0])._id;
+    await race.save();
+    res.json({ message: "Official result saved. Review it, then settle payouts.", race });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+router.post("/bets", async (req, res, next) => {
+  const amount = Number(req.body.stake);
+  if (!Number.isSafeInteger(amount) || amount < 10) return res.status(400).json({ error: "Stake must be a whole number of at least 10 credits." });
+  const session = await mongoose.startSession();
+  try {
+    let response;
+    await session.withTransaction(async () => {
+      const race = await Race.findById(req.body.raceId).session(session);
+      if (!race) throw new Error("Race not found.");
+      if (race.status !== "open") throw new Error("Betting is closed for this race.");
+      const horse = race.horses.id(req.body.horseId);
+      if (!horse) throw new Error("Select a valid horse.");
+      const wallet = await getWallet(req.user.id, session);
+      if (wallet.balance < amount) throw new Error("Not enough virtual credits.");
+      wallet.balance -= amount;
+      const ticket = { ticketId: crypto.randomUUID(), bettor: String(req.user.id), horseId: horse._id, horseName: horse.name, stake: amount };
+      wallet.transactions.push({ type: "bet", amount: -amount, balanceAfter: wallet.balance, note: `${race.name}: ${horse.name} (${ticket.ticketId})` });
+      race.bets.push(ticket);
+      await wallet.save({ session });
+      await race.save({ session });
+      response = { message: "Bet placed.", balance: wallet.balance, ticket: race.bets[race.bets.length - 1] };
+    });
+    res.status(201).json(response);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+  finally { await session.endSession(); }
 });
 
 router.post("/races/:id/close", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -177,6 +266,7 @@ router.post("/races/:id/close", async (req, res, next) => {
 });
 
 router.post("/races/:id/simulate", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
   try {
     const race = await Race.findById(req.params.id);
     if (!race) return res.status(404).json({ error: "Race not found." });
@@ -194,25 +284,40 @@ router.post("/races/:id/simulate", async (req, res, next) => {
 });
 
 router.post("/races/:id/settle", async (req, res, next) => {
+  if (!adminOnly(req, res)) return;
+  const session = await mongoose.startSession();
   try {
-    const race = await Race.findById(req.params.id);
-    if (!race) return res.status(404).json({ error: "Race not found." });
-    const result = settleRace(race);
-    const wallet = await getWallet();
-    for (const bet of race.bets.filter(b => b.bettor === "demo" && b.payout > 0)) {
-      wallet.balance += bet.payout;
-      wallet.transactions.push({ type: bet.status === "refunded" ? "refund" : "payout", amount: bet.payout, balanceAfter: wallet.balance, note: `${race.name}: ${bet.horseName}` });
-    }
-    await race.save();
-    await wallet.save();
-    res.json({ message: "Race settled.", result: { winner: result.winner.name, totalPool: result.totalPool, netPool: result.netPool, winningStake: result.winningStake, refundAll: result.refundAll, totalPaid: result.totalPaid }, race });
+    let response;
+    await session.withTransaction(async () => {
+      const race = await Race.findById(req.params.id).session(session);
+      if (!race) throw new Error("Race not found.");
+      const result = settleRace(race);
+      await race.save({ session });
+      const byBettor = new Map();
+      for (const bet of race.bets.filter(b => b.payout > 0)) {
+        const key = String(bet.bettor);
+        if (!byBettor.has(key)) byBettor.set(key, []);
+        byBettor.get(key).push(bet);
+      }
+      for (const [bettor, tickets] of byBettor) {
+        const wallet = await getWallet(bettor, session);
+        for (const bet of tickets) {
+          wallet.balance += bet.payout;
+          wallet.transactions.push({ type: bet.status === "refunded" ? "refund" : "payout", amount: bet.payout, balanceAfter: wallet.balance, note: `${race.name}: ${bet.horseName} (${bet.ticketId})` });
+        }
+        await wallet.save({ session });
+      }
+      response = { message: "Race settled.", result: { winner: result.winner.name, totalPool: result.totalPool, netPool: result.netPool, winningStake: result.winningStake, refundAll: result.refundAll, totalPaid: result.totalPaid }, race };
+    });
+    res.json(response);
   } catch (e) { res.status(400).json({ error: e.message }); }
+  finally { await session.endSession(); }
 });
 
-router.get("/bets/mine", async (_req, res, next) => {
+router.get("/bets/mine", async (req, res, next) => {
   try {
-    const races = await Race.find({ "bets.bettor": "demo" }).sort({ createdAt: -1 });
-    const bets = races.flatMap(race => race.bets.filter(b => b.bettor === "demo").map(b => ({
+    const races = await Race.find({ "bets.bettor": String(req.user.id) }).sort({ createdAt: -1 });
+    const bets = races.flatMap(race => race.bets.filter(b => b.bettor === String(req.user.id)).map(b => ({
       ...b.toObject(), raceId: race._id, raceName: race.name, venue: race.venue, raceStatus: race.status
     })));
     res.json(bets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
