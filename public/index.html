@@ -1,60 +1,139 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ToteTrack — Virtual Racing</title>
-  <link rel="stylesheet" href="/style.css">
+  <title>Gambling Addicts Hub</title>
+  <style>
+    :root { --accent: #C65135; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #f9f9f9; color: #333;
+    }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ddd; padding-bottom: 1rem; }
+    h1 { color: var(--accent); font-size: 1.5rem; margin: 0; }
+    .nav-links a { margin-left: 1rem; text-decoration: none; color: #555; font-weight: bold; }
+    .banner { background: var(--accent); color: #fff; padding: 0.6rem 1rem; border-radius: 6px; margin-top: 1rem; }
+    .card { background: #fff; border: 1px solid #ddd; padding: 1.5rem; border-radius: 8px; margin-top: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .admin-section { border-left: 5px solid #C65135; background: #fff5f3; }
+    form { display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1rem; }
+    input, select { padding: 0.6rem; border: 1px solid #ccc; border-radius: 4px; }
+    button { background: var(--accent); color: #fff; border: 0; padding: 0.7rem 1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    button:hover { opacity: 0.9; }
+    ul { padding-left: 1.2rem; }
+  </style>
 </head>
 <body>
-<header class="topbar">
-  <a class="brand" href="/">🏇 ToteTrack</a>
-  <nav><a href="#races">Races</a><a href="#import">Import race</a><a href="#history">My bets</a></nav>
-  <div class="wallet">Credits: <strong id="balance">…</strong></div>
-</header>
-<main class="container">
-  <section class="hero">
-    <div><p class="eyebrow">VIRTUAL TOTE SIMULATOR</p><h1>Every race starts<br>with a choice.</h1><p>Import your own racecards, build a shared pool, and see how parimutuel payouts work. Virtual credits only.</p></div>
-    <div class="hero-card"><span class="hero-icon">🏆</span><p class="muted">DEMO WALLET</p><strong id="heroBalance">10,000</strong><small>virtual credits</small></div>
-  </section>
-  <div id="notice" class="notice hidden"></div>
-  <section id="races" class="panel">
-    <div class="section-heading"><div><p class="eyebrow">RACE MEETINGS</p><h2>Your races</h2></div><button class="secondary" id="refreshBtn">Refresh</button></div>
-    <div id="raceList" class="race-grid"><p class="muted">Loading races…</p></div>
-  </section>
-  <section id="selectedRace" class="panel hidden">
-    <div class="section-heading"><div><p class="eyebrow">RACE CARD</p><h2 id="raceTitle">Race</h2><p id="raceMeta" class="muted"></p></div><span id="raceStatus" class="pill">OPEN</span></div>
-    <div class="table-wrap"><table><thead><tr><th>No.</th><th>Horse</th><th>Sire / Dam</th><th>Last race</th><th>Pool bet</th><th>Indicative return</th><th></th></tr></thead><tbody id="horseRows"></tbody></table></div>
-    <div class="bet-panel">
-      <div><p class="eyebrow">WIN BET</p><h3>Place your bet</h3><p class="muted">Minimum stake: 10 credits. Indicative returns can change until betting closes.</p></div>
-      <form id="betForm"><input type="hidden" id="betRaceId"><label>Selected horse<select id="betHorse" required></select></label><label>Stake (credits)<input id="stake" type="number" min="10" step="1" value="100" required></label><button>Place virtual bet</button></form>
+  <header>
+    <h1 id="hub-title">Gambling Addicts Hub</h1>
+    <div class="nav-links">
+      <a href="#" onclick="toggleRole()">Toggle Admin/User View</a>
+      <a href="/health">Health</a>
     </div>
-    <div id="raceActions" class="actions"></div>
-    <div id="results" class="results hidden"></div>
-  </section>
-  <section id="import" class="panel">
-    <div class="section-heading"><div><p class="eyebrow">RACE CARD</p><h2>Import a race</h2><p class="muted">Upload metadata and a horse CSV, or paste both formats below.</p></div></div>
-    <div class="template-links"><a class="secondary link-button" href="/api/templates/metadata">Metadata template</a><a class="secondary link-button" href="/api/templates/csv">CSV template</a></div>
-    <form id="importForm">
-      <div class="form-grid">
-        <label>Race metadata (.txt)<input type="file" id="metadataFile" accept=".txt,text/plain"></label>
-        <label>Horse CSV<input type="file" id="horseCsv" accept=".csv,text/csv"></label>
-      </div>
-      <div class="form-grid">
-        <label>Or paste metadata<textarea id="metadataText" rows="7" placeholder="name=Kikuka Sho&#10;date=2026-10-25&#10;venue=Kyoto&#10;raceNumber=11R&#10;takeRate=10&#10;distance=3000&#10;surface=Turf"></textarea></label>
-        <label>Or paste horse rows<textarea id="horseRows" rows="7" placeholder="gate,horse_no,name,sire,dam,damsire,last_race&#10;1,1,Example Horse,Example Sire,Example Dam,Example Damsire,Previous race"></textarea></label>
-      </div>
-      <p class="muted small">If you upload a file, it takes priority over the matching paste box. Use UTF-8 or Japanese CP932/Shift-JIS CSV files.</p>
-      <button type="submit">Import race card</button>
+  </header>
+
+  <p class="banner" id="banner">Loading server announcements...</p>
+
+  <!-- USER VIEW / MAIN HUB -->
+  <div class="card">
+    <h2>Active Race Cards & Runners</h2>
+    <ul id="list"></ul>
+    <form id="form">
+      <h3>Place a Quick Bet / Add Entry</h3>
+      <input id="text" placeholder="Add a horse or pick..." required>
+      <button>Submit Entry</button>
     </form>
-  </section>
-  <section id="history" class="panel">
-    <div class="section-heading"><div><p class="eyebrow">YOUR ACTIVITY</p><h2>My bets</h2></div><button class="secondary" id="historyBtn">Refresh history</button></div>
-    <div class="table-wrap"><table><thead><tr><th>Race</th><th>Horse</th><th>Stake</th><th>Status</th><th>Payout</th></tr></thead><tbody id="historyRows"><tr><td colspan="5" class="muted">No bets yet.</td></tr></tbody></table></div>
-    <button class="secondary" id="resetWallet">Reset demo wallet to 10,000</button>
-  </section>
-  <footer>Educational simulation only. No real-money betting.</footer>
-</main>
-<script src="/app.js"></script>
+  </div>
+
+  <!-- ADMIN CONTROL PANEL (Visible conditionally or via view toggle) -->
+  <div id="admin-panel" class="card admin-section" style="display:none;">
+    <h2>Manage the Server (Admin Console)</h2>
+    
+    <div style="margin-top: 1rem;">
+      <h3>Add tokens / manage user balance</h3>
+      <form id="token-form">
+        <label>Member Account:</label>
+        <select id="member-select">
+          <option value="Sato-Andolini">Sato-Andolini</option>
+        </select>
+        <label>Token Amount:</label>
+        <input type="number" id="token-amount" placeholder="e.g. 50" required>
+        <button type="submit">Give tokens (API)</button>
+      </form>
+    </div>
+
+    <div style="margin-top: 2rem;">
+      <h3>Record a slip manually</h3>
+      <form id="slip-form">
+        <label>Member:</label>
+        <select id="slip-member"><option value="Sato-Andolini">Sato-Andolini</option></select>
+        <label>Race:</label>
+        <input id="slip-race" placeholder="LWMM0001 Breeders' Cup Classic G1" required>
+        <button type="submit">Record Slip</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    let isAdminView = false;
+
+    async function load() {
+      const info = await (await fetch("/api/info")).json();
+      document.getElementById("banner").textContent = info.message;
+      
+      const items = await (await fetch("/api/items")).json();
+      const list = document.getElementById("list");
+      list.innerHTML = "";
+      items.forEach((i) => {
+        const li = document.createElement("li");
+        li.textContent = i.text;
+        list.appendChild(li);
+      });
+    }
+
+    function toggleRole() {
+      isAdminView = !isAdminView;
+      document.getElementById("admin-panel").style.display = isAdminView ? "block" : "none";
+      alert("Switched view mode to: " + (isAdminView ? "Admin" : "Standard User"));
+    }
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const box = document.getElementById("text");
+      await fetch("/api/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: box.value }),
+      });
+      box.value = "";
+      load();
+    });
+
+    document.getElementById("token-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const member = document.getElementById("member-select").value;
+      const amount = document.getElementById("token-amount").value;
+      await fetch("/api/admin/tokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-auth": "true" },
+        body: JSON.stringify({ member, amount }),
+      });
+      alert("Tokens granted successfully!");
+    });
+
+    document.getElementById("slip-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const member = document.getElementById("slip-member").value;
+      const race = document.getElementById("slip-race").value;
+      await fetch("/api/slips", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member, race }),
+      });
+      alert("Slip recorded!");
+    });
+
+    load();
+  </script>
 </body>
 </html>
