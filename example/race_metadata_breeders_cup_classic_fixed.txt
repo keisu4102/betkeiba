@@ -1,0 +1,8 @@
+# One key=value entry per line. Lines beginning with # are comments.
+race_key=breeders-cup-classic-2026
+display_name=LONGINES Breeders' Cup Classic (G1)
+race_date=2026-10-31
+venue=Keeneland
+race_number=12R
+source_url=https://www.racingtv.com/racecards/2026-10-31/keeneland/2216
+take_rate=0
