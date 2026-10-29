@@ -761,4 +761,662 @@ $('createRaceForm').onsubmit = async e => {
                     gate: Number(m[1]),
                     horseNo: Number(m[1]),
                     name: m[2].trim(),
-              
+                    abilityScore: 50
+                };
+            });
+
+        if (horses.length < 2) {
+            throw new Error('Add at least two runners.');
+        }
+
+        const d = await api('/api/races', {
+            method: 'POST',
+            body: JSON.stringify({
+                name: f.get('name'),
+                venue: f.get('venue'),
+                date: f.get('date'),
+                raceNumber: f.get('raceNumber'),
+                distance: f.get('distance')
+                    ? Number(f.get('distance'))
+                    : null,
+                surface: f.get('surface'),
+                takeRate: Number(f.get('takeRate')),
+                horses
+            })
+        });
+
+        e.currentTarget.reset();
+
+        notice('Race created.');
+
+        await loadRaces();
+        await openRace(d._id);
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+};
+
+/* =========================================================
+   IMPORT RACE
+========================================================= */
+
+$('importForm').onsubmit = async e => {
+    e.preventDefault();
+
+    const form = new FormData();
+
+    if ($('metadataFile').files[0]) {
+        form.append(
+            'metadataFile',
+            $('metadataFile').files[0]
+        );
+    }
+
+    if ($('horseCsv').files[0]) {
+        form.append(
+            'horseCsv',
+            $('horseCsv').files[0]
+        );
+    }
+
+    try {
+        const d = await api(
+            '/api/races/import',
+            {
+                method: 'POST',
+                body: form
+            }
+        );
+
+        e.currentTarget.reset();
+
+        notice(d.message);
+
+        await loadRaces();
+        await openRace(d.race._id);
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+};
+
+/* =========================================================
+   HORSE MANAGEMENT — CLEAR EDITOR
+========================================================= */
+
+function clearHorseEditor() {
+    const form = $('horseEditor');
+
+    if (!form) return;
+
+    form.reset();
+
+    form.elements.namedItem('horseId').value = '';
+
+    $('horseEditorTitle').textContent = 'Add New Horse';
+
+    const submit = form.querySelector(
+        'button[type="submit"]'
+    );
+
+    if (submit) {
+        submit.textContent = 'Add Horse';
+    }
+}
+
+/* =========================================================
+   HORSE MANAGEMENT — RENDER HORSE LIST
+========================================================= */
+
+function renderManagedHorses() {
+    if (!selectedRace || me.role !== 'admin') return;
+
+    const rows = $('managedHorseRows');
+
+    if (!rows) return;
+
+    if (!selectedRace.horses.length) {
+        rows.innerHTML = `
+            <tr>
+                <td colspan="7" class="horse-empty">
+                    No horses have been added to this race yet.
+                </td>
+            </tr>
+        `;
+
+        return;
+    }
+
+    rows.innerHTML = selectedRace.horses.map(h => `
+        <tr>
+            <td>
+                ${esc(h.horseNo)}
+            </td>
+
+            <td>
+                <strong class="horse-name">
+                    ${esc(h.name)}
+                </strong>
+            </td>
+
+            <td>
+                ${esc(h.abilityScore ?? '—')}
+            </td>
+
+            <td>
+                ${esc(h.gate ?? '—')}
+            </td>
+
+            <td>
+                ${esc(h.bracket ?? '—')}
+            </td>
+
+            <td>
+                ${esc(h.lastRace || '—')}
+            </td>
+
+            <td>
+                <div class="horse-actions">
+
+                    <button
+                        type="button"
+                        class="btn btn-quiet"
+                        data-horse-action="edit"
+                        data-horse-id="${h._id}"
+                    >
+                        Edit
+                    </button>
+
+                    <button
+                        type="button"
+                        class="btn btn-danger"
+                        data-horse-action="delete"
+                        data-horse-id="${h._id}"
+                    >
+                        Delete
+                    </button>
+
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+/* =========================================================
+   HORSE MANAGEMENT — EDIT HORSE
+========================================================= */
+
+function editHorse(id) {
+    if (!selectedRace || me.role !== 'admin') return;
+
+    const horse = selectedRace.horses.find(
+        h => String(h._id) === String(id)
+    );
+
+    if (!horse) {
+        notice('Horse could not be found.', true);
+        return;
+    }
+
+    const form = $('horseEditor');
+
+    form.elements.namedItem('horseId').value =
+        horse._id;
+
+    form.elements.namedItem('name').value =
+        horse.name || '';
+
+    form.elements.namedItem('horseNo').value =
+        horse.horseNo ?? '';
+
+    form.elements.namedItem('abilityScore').value =
+        horse.abilityScore ?? 50;
+
+    form.elements.namedItem('gate').value =
+        horse.gate ?? '';
+
+    form.elements.namedItem('bracket').value =
+        horse.bracket ?? '';
+
+    form.elements.namedItem('post').value =
+        horse.post ?? '';
+
+    form.elements.namedItem('sire').value =
+        horse.sire || '';
+
+    form.elements.namedItem('dam').value =
+        horse.dam || '';
+
+    form.elements.namedItem('damsire').value =
+        horse.damsire || '';
+
+    form.elements.namedItem('lastRace').value =
+        horse.lastRace || '';
+
+    $('horseEditorTitle').textContent =
+        `Edit Horse: ${horse.name}`;
+
+    const submit = form.querySelector(
+        'button[type="submit"]'
+    );
+
+    if (submit) {
+        submit.textContent = 'Save Changes';
+    }
+
+    form.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+    });
+}
+
+/* =========================================================
+   HORSE MANAGEMENT — ADD / UPDATE HORSE
+========================================================= */
+
+$('horseEditor').onsubmit = async e => {
+    e.preventDefault();
+
+    if (!selectedRace || me.role !== 'admin') {
+        notice('Administrator access is required.', true);
+        return;
+    }
+
+    const form = e.currentTarget;
+    const f = new FormData(form);
+
+    const horseId = String(
+        f.get('horseId') || ''
+    ).trim();
+
+    const name = String(
+        f.get('name') || ''
+    ).trim();
+
+    const horseNo = Number(
+        f.get('horseNo')
+    );
+
+    const abilityScore = Number(
+        f.get('abilityScore')
+    );
+
+    if (!name) {
+        notice('Enter the horse name.', true);
+        return;
+    }
+
+    if (
+        !Number.isSafeInteger(horseNo) ||
+        horseNo < 1
+    ) {
+        notice('Enter a valid horse number.', true);
+        return;
+    }
+
+    if (
+        !Number.isFinite(abilityScore) ||
+        abilityScore < 0
+    ) {
+        notice('Enter a valid ability score.', true);
+        return;
+    }
+
+    const horseData = {
+        name,
+        horseNo,
+        abilityScore,
+
+        gate: f.get('gate')
+            ? Number(f.get('gate'))
+            : null,
+
+        bracket: f.get('bracket')
+            ? Number(f.get('bracket'))
+            : null,
+
+        post: f.get('post')
+            ? Number(f.get('post'))
+            : null,
+
+        sire: String(f.get('sire') || '').trim(),
+        dam: String(f.get('dam') || '').trim(),
+        damsire: String(f.get('damsire') || '').trim(),
+        lastRace: String(f.get('lastRace') || '').trim()
+    };
+
+    try {
+        if (horseId) {
+            await api(
+                `/api/races/${selectedRace._id}/horses/${horseId}`,
+                {
+                    method: 'PUT',
+                    body: JSON.stringify(horseData)
+                }
+            );
+
+            notice(`${name} updated successfully.`);
+
+        } else {
+            await api(
+                `/api/races/${selectedRace._id}/horses`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify(horseData)
+                }
+            );
+
+            notice(`${name} added to the race.`);
+        }
+
+        await loadRaces();
+        await openRace(selectedRace._id);
+
+    } catch (err) {
+        notice(err.message, true);
+    }
+};
+
+/* =========================================================
+   HORSE MANAGEMENT — DELETE HORSE
+========================================================= */
+
+async function deleteHorse(id) {
+    if (!selectedRace || me.role !== 'admin') return;
+
+    const horse = selectedRace.horses.find(
+        h => String(h._id) === String(id)
+    );
+
+    if (!horse) {
+        notice('Horse could not be found.', true);
+        return;
+    }
+
+    if (!confirm(
+        `Delete ${horse.name} from this race?`
+    )) return;
+
+    try {
+        await api(
+            `/api/races/${selectedRace._id}/horses/${id}`,
+            {
+                method: 'DELETE'
+            }
+        );
+
+        notice(`${horse.name} removed from the race.`);
+
+        await loadRaces();
+        await openRace(selectedRace._id);
+
+    } catch (err) {
+        notice(err.message, true);
+    }
+}
+
+/* =========================================================
+   HORSE MANAGEMENT — BUTTON EVENTS
+========================================================= */
+
+$('managedHorseRows').addEventListener(
+    'click',
+    e => {
+        const button = e.target.closest(
+            '[data-horse-action]'
+        );
+
+        if (!button) return;
+
+        const id = button.dataset.horseId;
+        const action = button.dataset.horseAction;
+
+        if (action === 'edit') {
+            editHorse(id);
+        }
+
+        if (action === 'delete') {
+            deleteHorse(id);
+        }
+    }
+);
+
+$('horseEditorCancel').onclick = () => {
+    clearHorseEditor();
+};
+
+/* =========================================================
+   BETTING HISTORY
+========================================================= */
+
+async function loadHistory() {
+    try {
+        const bets = await api('/api/bets/mine');
+
+        $('historyList').innerHTML = bets.length
+            ? bets.map(b => `
+                <div class="history-item">
+
+                    <strong>
+                        ${esc(b.horseName)}
+                    </strong>
+
+                    <small>
+                        ${esc(b.raceName)} · ${esc(b.status)}
+                    </small>
+
+                    <div>
+                        ${money(b.stake)} staked ·
+                        ${money(b.payout)} payout
+                    </div>
+
+                    <small>
+                        Ticket ${esc(String(b.ticketId).slice(0, 8))}
+                    </small>
+
+                </div>
+            `).join('')
+            : `
+                <p class="muted small">
+                    No bets yet. Choose a race to place your first ticket.
+                </p>
+            `;
+
+    } catch (e) {
+        $('historyList').innerHTML = `
+            <p class="muted">
+                ${esc(e.message)}
+            </p>
+        `;
+    }
+}
+
+/* =========================================================
+   ADMIN — USER MANAGEMENT
+========================================================= */
+
+async function loadUsers() {
+    if (me.role !== 'admin') return;
+
+    try {
+        const users = await api('/api/admin/users');
+
+        $('userRows').innerHTML = users.map(u => `
+            <tr>
+
+                <td>${esc(u.username)}</td>
+
+                <td>${esc(u.role)}</td>
+
+                <td>${money(u.balance)}</td>
+
+                <td>
+                    ${u.active ? 'Active' : 'Disabled'}
+                </td>
+
+                <td>
+
+                    <button
+                        class="btn btn-quiet"
+                        onclick="adjustCredits('${u.id}','${esc(u.username)}')"
+                    >
+                        ± Credits
+                    </button>
+
+                    <button
+                        class="btn btn-quiet"
+                        onclick="toggleUser('${u.id}',${!u.active})"
+                    >
+                        ${u.active ? 'Disable' : 'Enable'}
+                    </button>
+
+                    <button
+                        class="btn btn-quiet"
+                        onclick="changeRole('${u.id}','${u.role === 'admin' ? 'user' : 'admin'}')"
+                    >
+                        Make ${u.role === 'admin' ? 'user' : 'admin'}
+                    </button>
+
+                </td>
+
+            </tr>
+        `).join('') || `
+            <tr>
+                <td colspan="5">No users yet.</td>
+            </tr>
+        `;
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+}
+
+/* =========================================================
+   ADMIN — ADJUST USER CREDITS
+========================================================= */
+
+window.adjustCredits = async (id, username) => {
+    const amount = prompt(
+        `Adjust ${username}'s balance. Use a positive number to add or negative to deduct.`
+    );
+
+    if (amount === null) return;
+
+    const n = Number(amount);
+
+    if (!Number.isSafeInteger(n) || n === 0) {
+        notice('Enter a non-zero whole number.', true);
+        return;
+    }
+
+    try {
+        const d = await api(
+            `/api/admin/users/${id}/credits`,
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    amount: n,
+                    note: `Admin adjustment by ${me.username}`
+                })
+            }
+        );
+
+        notice(
+            `${username}'s balance is now ${money(d.balance)} credits.`
+        );
+
+        await loadUsers();
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+};
+
+/* =========================================================
+   ADMIN — ENABLE / DISABLE USER
+========================================================= */
+
+window.toggleUser = async (id, active) => {
+    try {
+        await api(
+            `/api/admin/users/${id}`,
+            {
+                method: 'PATCH',
+                body: JSON.stringify({ active })
+            }
+        );
+
+        notice('Account status updated.');
+
+        await loadUsers();
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+};
+
+/* =========================================================
+   ADMIN — CHANGE USER ROLE
+========================================================= */
+
+window.changeRole = async (id, role) => {
+    if (!confirm(
+        `Change this account role to ${role}?`
+    )) return;
+
+    try {
+        await api(
+            `/api/admin/users/${id}`,
+            {
+                method: 'PATCH',
+                body: JSON.stringify({ role })
+            }
+        );
+
+        notice('Account role updated.');
+
+        await loadUsers();
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+};
+
+/* =========================================================
+   NAVIGATION & REFRESH BUTTONS
+========================================================= */
+
+$('refreshBtn').onclick = async () => {
+    try {
+        await loadRaces();
+        await refreshWallet();
+
+        notice('Racecards refreshed.');
+
+    } catch (e) {
+        notice(e.message, true);
+    }
+};
+
+$('historyBtn').onclick = () => {
+    $('historyList').scrollIntoView({
+        behavior: 'smooth'
+    });
+
+    loadHistory();
+};
+
+$('reloadUsers').onclick = loadUsers;
+
+/* =========================================================
+   GLOBAL RACE FUNCTION
+========================================================= */
+
+window.openRace = openRace;
+
+/* =========================================================
+   START APPLICATION
+========================================================= */
+
+boot();
