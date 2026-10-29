@@ -137,7 +137,7 @@ router.put("/races/:id/horses/:horseId", async (req, res, next) => {
     if (race.status !== "open" || race.bets.length) return res.status(400).json({ error: "Runners can only be edited before any bets are placed." });
     const horse = race.horses.id(req.params.horseId);
     if (!horse) return res.status(404).json({ error: "Horse not found." });
-    ["gate", "horseNo", "name", "sire", "dam", "damsire", "lastRace", "abilityScore"].forEach(k => {
+    ["gate", "horseNo", "bracket", "post", "name", "sire", "dam", "damsire", "lastRace", "abilityScore"].forEach(k => {
       if (req.body[k] !== undefined) horse[k] = req.body[k];
     });
     await race.save();
