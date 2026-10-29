@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const horseSchema = new mongoose.Schema({
   gate: { type: Number, required: true, min: 1 },
   horseNo: { type: Number, required: true, min: 1 },
+  bracket: { type: Number, default: null, min: 1 },
+  post: { type: Number, default: null, min: 1 },
   name: { type: String, required: true, trim: true },
   sire: { type: String, default: "" },
   dam: { type: String, default: "" },
