@@ -1,103 +1,84 @@
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const session = require('express-session');
+const MongoStore = require('connect-mongo');
+const bcrypt = require('bcryptjs');
+const path = require('path');
+const User = require('./src/models/User');
+const api = require('./src/routes');
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-// ===== MAKE IT YOURS: Horse Racing Theme =====
-const APP_TITLE = "Gambling Addicts Hub";
-const ITEM_NAME = "horse";
-const OWNER = "Your Name"; 
-// ============================================
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+app.use(session({
+  name: 'betkeiba.sid',
+  secret: process.env.SESSION_SECRET || 'development-only-change-me',
+  resave: false, saveUninitialized: false,
+  store: process.env.MONGODB_URI ? MongoStore.create({ mongoUrl: process.env.MONGODB_URI, collectionName: 'sessions' }) : undefined,
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000 * 60 * 60 * 24 * 7 }
+}));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory application state
-const items = [{ id: 1, text: "Sample " + ITEM_NAME + ": Thunder Hooves (Odds: 4/1)" }];
-const members = [{ name: "Sato-Andolini", tokens: 100 }];
-const races = [{ id: 1, name: "LWMM0001 Breeders' Cup Classic G1 - Post 1 - 7:15 Rexcelsior" }];
-const tokensLog = [];
-const slipsLog = [];
-
-function sendJson(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(data));
+function requireAuth(req, res, next) {
+  if (!req.session.userId || !req.user) return res.status(401).json({ error: 'Please log in to continue.' });
+  if (!req.user.active) return res.status(403).json({ error: 'This account is disabled.' });
+  next();
 }
-
-const server = http.createServer((req, res) => {
-  const url = req.url.split("?")[0];
-  const isAdmin = req.headers["x-admin-auth"] === "true" || req.url.includes("admin=true");
-
-  if (req.method === "GET" && url === "/health") {
-    return sendJson(res, 200, { status: "ok" });
-  }
-
-  if (req.method === "GET" && url === "/api/info") {
-    return sendJson(res, 200, {
-      title: APP_TITLE,
-      itemName: ITEM_NAME,
-      owner: OWNER,
-      message: process.env.APP_MESSAGE || "Live Odds Open: Place Your Bets Responsibly!",
-      isAdmin: isAdmin
-    });
-  }
-
-  if (req.method === "GET" && url === "/api/about") {
-    return sendJson(res, 200, {
-      owner: OWNER,
-      purpose: "A digital race card and betting tracker to view upcoming horse runners, check odds, and place mock bets.",
-    });
-  }
-
-  if (url === "/api/items" && req.method === "GET") {
-    return sendJson(res, 200, items);
-  }
-
-  // Admin action: Add token or manage members
-  if (url === "/api/admin/tokens" && req.method === "POST") {
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
-      try {
-        const data = JSON.parse(body);
-        tokensLog.push(data);
-        sendJson(res, 201, { success: true, message: "Token assigned successfully", data });
-      } catch (e) {
-        sendJson(res, 400, { error: "Invalid payload" });
-      }
-    });
-    return;
-  }
-
-  // Admin action: Record slip manually / Place bet
-  if (url === "/api/slips" && req.method === "POST") {
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
-      try {
-        const data = JSON.parse(body);
-        slipsLog.push(data);
-        sendJson(res, 201, { success: true, message: "Slip recorded successfully", data });
-      } catch (e) {
-        sendJson(res, 400, { error: "Invalid payload" });
-      }
-    });
-    return;
-  }
-
-  if (url === "/api/slips" && req.method === "GET") {
-    return sendJson(res, 200, slipsLog);
-  }
-
-  if (req.method === "GET" && url === "/") {
-    return fs.readFile(path.join(__dirname, "public", "index.html"), (err, html) => {
-      if (err) return sendJson(res, 500, { error: "page missing" });
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(html);
-    });
-  }
-  
-  sendJson(res, 404, { error: "not found" });
+app.use(async (req, res, next) => {
+  try { if (req.session?.userId) req.user = await User.findById(req.session.userId).select('_id username role active'); next(); }
+  catch (e) { next(e); }
 });
+app.get('/health', (_req, res) => res.json({ status: 'ok', database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' }));
+app.get('/api/auth/me', (req, res) => res.json({ user: req.user ? { id: req.user.id, username: req.user.username, role: req.user.role } : null }));
+app.post('/api/auth/register', async (req, res, next) => {
+  try {
+    const username = String(req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(username)) return res.status(400).json({ error: 'Username must be 3–30 characters using letters, numbers, dot, dash, or underscore.' });
+    if (password.length < 10 || password.length > 128) return res.status(400).json({ error: 'Password must be at least 10 characters.' });
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await User.create({ username, passwordHash, role: 'user' });
+    const Wallet = require('./src/models/Wallet');
+    await Wallet.create({ key: String(user._id), balance: Number(process.env.STARTING_CREDITS || 10000), transactions: [{ type: 'welcome', amount: Number(process.env.STARTING_CREDITS || 10000), balanceAfter: Number(process.env.STARTING_CREDITS || 10000), note: 'Starting virtual credits' }] });
+    req.session.userId = String(user._id);
+    res.status(201).json({ user: { id: user.id, username: user.username, role: user.role } });
+  } catch (e) { if (e.code === 11000) return res.status(409).json({ error: 'That username is already taken.' }); next(e); }
+});
+app.post('/api/auth/login', async (req, res, next) => {
+  try {
+    const username = String(req.body.username || '').trim();
+    const user = await User.findOne({ username });
+    if (!user || !user.active || !(await bcrypt.compare(String(req.body.password || ''), user.passwordHash))) return res.status(401).json({ error: 'Invalid username or password.' });
+    req.session.regenerate(err => { if (err) return next(err); req.session.userId = String(user._id); res.json({ user: { id: user.id, username: user.username, role: user.role } }); });
+  } catch (e) { next(e); }
+});
+app.post('/api/auth/logout', (req, res) => req.session.destroy(() => { res.clearCookie('betkeiba.sid'); res.json({ message: 'Logged out.' }); }));
+app.use('/api', (req, res, next) => { if (req.path.startsWith('/auth/')) return next(); requireAuth(req, res, next); });
+app.use('/api', api);
+app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.use((err, _req, res, _next) => { console.error(err); res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Server error. Check application logs.' : err.message }); });
 
-if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () => console.log("Running on port " + PORT));
+async function start() {
+  if (!process.env.MONGODB_URI) { console.error('MONGODB_URI is required. Set it in your hosting environment.'); process.exit(1); }
+  if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) { console.error('SESSION_SECRET is required in production.'); process.exit(1); }
+  await mongoose.connect(process.env.MONGODB_URI);
+  console.log('MongoDB connected');
+  if (process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
+    const username = String(process.env.ADMIN_USERNAME).trim();
+    const existing = await User.findOne({ username });
+    if (!existing) {
+      const passwordHash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 12);
+      const admin = await User.create({ username, passwordHash, role: 'admin' });
+      const Wallet = require('./src/models/Wallet');
+      await Wallet.create({ key: String(admin._id), balance: Number(process.env.STARTING_CREDITS || 10000) });
+      console.log('Initial administrator account created from environment settings.');
+    } else if (existing.role !== 'admin') { console.error('ADMIN_USERNAME already belongs to a regular user. Choose a new unused ADMIN_USERNAME; the account was NOT promoted.'); }
+  } else console.warn('ADMIN_USERNAME/ADMIN_PASSWORD not set; configure them in hosting environment to initialize an administrator.');
+  app.listen(PORT, () => console.log(`Betkeiba listening on ${PORT}`));
 }
-module.exports = server;
+if (require.main === module) start().catch(err => { console.error(err); process.exit(1); });
+module.exports = app;
